@@ -1,0 +1,159 @@
+service: authentication-with-serverless
+frameworkVersion: ">=2.33.1"
+
+package:
+  exclude:
+    - ./**
+    - '!node_modules/**'
+  include:
+    - '!node_modules/aws-sdk/**'
+    - '!node_modules/**/aws-sdk/**'
+    - build/**
+    - package.json
+    - package-lock.json
+  excludeDevDependencies: true
+
+provider:
+  name: aws
+  runtime: nodejs14.x
+  
+  lambdaHashingVersion: "20201221"
+
+  iam:
+    role:
+      statements:
+        - Effect: 'Allow'
+          Action:
+              - 'lambda:InvokeFunction'
+              - 'lambda:InvokeAsync'
+          Resource:
+          - Fn::Join:
+              - ':'
+              - - arn:aws:lambda
+                - Ref: AWS::Region
+                - Ref: AWS::AccountId
+                - function:${self:service}-${opt:stage, self:provider.stage}-*
+
+        - Effect: "Allow"
+          Action:
+            - "secretsmanager:GetSecretValue"
+          Resource:
+            - 'Fn::Join':
+                - ":"
+                - - arn:aws:secretsmanager
+                  - Ref: AWS::Region
+                  - Ref: AWS::AccountId
+                  - secret:${self:custom.config.environment.TOKEN_SECRET_ID}-*
+
+  vpc: ${self:custom.config.vpc}
+  stage: ${opt:stage, 'local'}
+  region: ${self:custom.config.region}
+  apiGateway:
+    restApiId:
+      'Fn::ImportValue': authentication-api-${opt:stage, 'local'}-restApiId
+    restApiRootResourceId:
+      'Fn::ImportValue': authentication-api-${opt:stage, 'local'}-restApiRootResourceId
+
+  environment:
+    REGION: ${self:custom.region}
+    STAGE: ${self:custom.stage}
+    DB_USER_TABLE: ${self:custom.database.user}
+    TOKEN_SECRET_ID: ${custom.environment.TOKEN_SECRET_ID}
+    ACCESS_CONTROL_ALLOW_ORIGIN: '*'
+
+
+functions:
+    verifyAuth:
+        handler: build/src/domain/handlers/index.verifyToken
+        description: authorization token verification       
+    registerNewUser:
+        handler: build/src/domain/handlers/index.registerUser
+        description: create user to plataform
+        events:
+        - http:
+            path: /register
+            method: post
+            cors: true
+            authorizer: 
+              name: verifyAdminAuth
+              resultTtlInSeconds: 0 
+
+    login:
+        handler: build/src/domain/handlers/index.signin
+        description: perform the login
+        events:
+        - http:
+            path: /login
+            method: post
+            cors: true
+
+# Carrega as configurações do stage
+custom:
+  config: ${file(stages.yml):${opt:stage, self:provider.stage}}
+  stage: ${self:provider.stage}
+  region: ${opt:region, self:provider.region}
+  database:
+      user: ${self:service}-${self:custom.stage}-sender-push-user
+  warmup:
+    default:
+      enabled:
+  dynamodb:
+      stages:
+          - local
+      start:
+          port: 8000
+          inMemory: true
+          migrate: true
+          seed: false
+  serverless-offline-dynamodb-streams:
+    endpoint: http://127.0.0.1:8000
+  prune:
+    automatic: true
+    number: 3
+  scriptHooks:
+    'before:package:createDeploymentArtifacts': npx tsc --build .
+
+resources:
+  Resources:
+
+    SenderPushUserTable:
+        Type: AWS::DynamoDB::Table
+        Properties:
+            TableName: ${self:custom.database.user}
+            AttributeDefinitions: 
+                - AttributeName: email
+                  AttributeType: S
+            KeySchema:
+                - AttributeName: email
+                  KeyType: HASH
+            ProvisionedThroughput:
+              ReadCapacityUnits: 1
+              WriteCapacityUnits: 1
+
+    DynamoDBIamPolicy:
+        Type: AWS::IAM::Policy
+        DependsOn:
+            - SenderPushUserTable
+        Properties:
+            PolicyName: ${self:custom.database.user}-dynamodb
+            PolicyDocument:
+                Version: "2012-10-17"
+                Statement:
+                    - Effect: Allow
+                      Action:
+                          - dynamodb:*
+                      Resource:
+                          - arn:aws:dynamodb:*:*:table/${self:custom.database.user}
+                          - arn:aws:dynamodb:*:*:table/${self:custom.database.user}/index/*
+            Roles:
+                - Ref: IamRoleLambdaExecution
+
+
+plugins:
+  - serverless-scriptable-plugin
+  - serverless-plugin-warmup
+  - serverless-plugin-split-stacks
+  - serverless-offline
+  - serverless-prune-plugin
+  - serverless-dynamodb-local
+

@@ -1,0 +1,17 @@
+region: us-east-1
+
+environment:
+    TOKEN_SECRET_ID: 
+
+vpc:
+    securityGroupIds:
+        - 
+    subnetIds:
+        - 
+
+domainName: 
+
+cors:
+  ALLOW_ORIGIN: "*"
+  ALLOW_HEADERS: 'GET, POST, PUT, PATCH, DELETE, OPTIONS'
+  ALLOW_METHODS: "Content-Type, Authorization, X-SessionID"
